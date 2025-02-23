@@ -1,0 +1,1 @@
+Provides a type for a path. Includes a convenient asset search by path, as well as a search engine for an asset.

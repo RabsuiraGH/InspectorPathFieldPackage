@@ -1,0 +1,8 @@
+{
+  "name": "com.rabsuiragh.inspectorpathfield",
+  "version": "1.0.0",
+  "displayName": "Inspector path field",
+  "description": "Field for path",
+  "unity": "2020.3",
+  "dependencies": {},
+}
