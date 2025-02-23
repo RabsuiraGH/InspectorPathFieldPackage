@@ -4,5 +4,5 @@
   "displayName": "Inspector path field",
   "description": "Field for path",
   "unity": "2020.3",
-  "dependencies": {},
+  "dependencies": {}
 }
