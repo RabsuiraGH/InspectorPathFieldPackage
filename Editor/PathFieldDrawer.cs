@@ -1,16 +1,65 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using UnityEditor;
+using UnityEditor.Search;
 using UnityEngine;
+using UnityEngine.Search;
+using Object = UnityEngine.Object;
 
 namespace InspectorPathField.Editor
 {
     [CustomPropertyDrawer(typeof(PathField))]
-    public class PathFieldDrawer : PropertyDrawer
+    internal sealed class PathFieldDrawer : PropertyDrawer
     {
-        private int _pickerControlID = -1;
-        private const float GOTO_BUTTON_WIDTH = 20f;
-        private const float SEARCH_BUTTON_WIDTH = 20f;
-        private const float BUTTON_SPACING = 3;
+        private static PathFieldResources _resources;
+        private static PathFieldSettings _settings;
+        private const float BUTTON_WIDTH = 20f;
+        private const float BUTTON_SPACING = 2;
+        private const int BUTTON_COUNT = 3;
+        private const float SELECTOR_WINDOW_Y_SHIFT = -45;
+        private const float BTN_SHIFT = (BUTTON_WIDTH * BUTTON_COUNT) + (BUTTON_SPACING * (BUTTON_COUNT - 1));
         private float _textFieldWidth;
+
+        private static readonly GUIStyle ButtonStyle = new(GUI.skin.button)
+        {
+            border = new RectOffset(1, 1, 1, 1),
+            padding = new RectOffset(1, 1, 1, 1)
+        };
+
+        private PathDisplayMode _currentDisplayMode = PathDisplayMode.ShortPath;
+
+
+        public PathFieldDrawer()
+        {
+            if (_resources == null)
+            {
+                _resources = PathFieldResources.GetAssets();
+#if UNITY_EDITOR_PATH_FIELD_DEBUG
+                if (_resources != null)
+                {
+                    Debug.Log(($"Asset load done"));
+                }
+#endif
+            }
+
+            if (_settings == null)
+            {
+                _settings = PathFieldSettings.GetAssets();
+
+#if UNITY_EDITOR_PATH_FIELD_DEBUG
+                if (_settings != null)
+                {
+                    Debug.Log(($"Settings load done"));
+                }
+#endif
+            }
+            else
+            {
+                _currentDisplayMode = _settings.PathDisplayMode;
+            }
+        }
 
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
@@ -19,45 +68,188 @@ namespace InspectorPathField.Editor
             SerializedProperty assetPath = property.FindPropertyRelative("AssetPath");
 
             // Calculate text field size depends on the button size
-            _textFieldWidth = position.width - GOTO_BUTTON_WIDTH - SEARCH_BUTTON_WIDTH - BUTTON_SPACING;
+            _textFieldWidth = position.width - BTN_SHIFT;
 
             // Setup rectangle for text field
             Rect textFieldRect = new(position.x, position.y, _textFieldWidth, position.height);
-            EditorGUI.PropertyField(textFieldRect, assetPath, label);
+
+            string displayText;
+            EditorGUI.BeginChangeCheck();
+
+            // Display mode logic
+            if (textFieldRect.Contains(Event.current.mousePosition)) // if mouse hover, show full path and let change
+            {
+                displayText = assetPath.stringValue;
+                assetPath.stringValue = EditorGUI.TextField(textFieldRect, label, displayText);
+            }
+            else // if no, just show current display mode
+            {
+                displayText = GetPathForCurrentMode(assetPath.stringValue);
+                EditorGUI.TextField(textFieldRect, label, displayText);
+            }
 
             // Goto button
-            if (!string.IsNullOrEmpty(assetPath.stringValue))
-            {
-                // Setup rectangle for goto button
-                Rect gotoButtonRect = new(position.x + _textFieldWidth, position.y, GOTO_BUTTON_WIDTH, position.height);
+            GotoButton(0, assetPath, ref position);
 
-                // On press action
-                if (GUI.Button(gotoButtonRect, "▶"))
-                {
-                    Object obj = AssetDatabase.LoadAssetAtPath<Object>(assetPath.stringValue);
-                    if (obj != null)
-                        EditorGUIUtility.PingObject(obj);
-                }
-            }
+            // Display mode
+            DisplayModeButton(1, assetPath, ref position);
 
             // Search button
-            Rect searchButtonRect = new(position.x + _textFieldWidth + GOTO_BUTTON_WIDTH + BUTTON_SPACING, position.y,
-                                        SEARCH_BUTTON_WIDTH,
-                                        position.height);
-
-            // On press action
-            if (GUI.Button(searchButtonRect, "s"))
+            if (_settings.SearchType == SearchType.ObjectPicker)
             {
-                _pickerControlID = GUIUtility.GetControlID(FocusType.Passive);
-                EditorGUIUtility.ShowObjectPicker<Object>(null, false, "", _pickerControlID);
+                SearchButtonObjectPicker(2, assetPath, ref position, property);
+            }
+            else if (_settings.SearchType == SearchType.UnitySearch)
+            {
+                SearchButtonUnitySearch(2, assetPath, ref position, property);
             }
 
-            if (Event.current.commandName != "ObjectSelectorUpdated" ||
-                EditorGUIUtility.GetObjectPickerControlID() != _pickerControlID)
+            assetPath.serializedObject.ApplyModifiedProperties();
+        }
+
+
+        private string GetPathForCurrentMode(string originalPath)
+        {
+            return _currentDisplayMode switch
+            {
+                PathDisplayMode.ShortPath => RemoveAllTokens(originalPath, _settings.ShortPathTokensToRemove),
+                PathDisplayMode.FileName => originalPath.Split("/")[^1],
+                _ => originalPath
+            };
+        }
+
+
+        private static string RemoveAllTokens(string original, IEnumerable<string> tokens)
+        {
+            if (tokens == null || !tokens.Any()) return original;
+            string[] pathParts = original.Split('/');
+
+            var filteredParts = new List<string>();
+
+            bool shouldRemove = true;
+
+            foreach (string part in pathParts)
+            {
+                if (shouldRemove && tokens.Contains(part))
+                {
+                    continue;
+                }
+
+                shouldRemove = false;
+                filteredParts.Add(part);
+            }
+
+            string result = string.Join("/", filteredParts);
+            return result;
+        }
+
+
+        private string GetSymbolByDisplayMode()
+        {
+            return _currentDisplayMode switch
+            {
+                PathDisplayMode.FullPath => "F",
+                PathDisplayMode.ShortPath => "S",
+                _ => "N"
+            };
+        }
+
+
+        private void GotoButton(int buttonIndex, SerializedProperty assetPath, ref Rect position)
+        {
+            bool canGoto = !string.IsNullOrEmpty(assetPath.stringValue);
+
+            GUI.enabled = canGoto;
+
+            // Setup rectangle for goto button
+            Rect gotoButtonRect = new(position.x + ButtonShift(buttonIndex),
+                                      position.y, BUTTON_WIDTH,
+                                      position.height);
+
+            // On press action
+            if (!GUI.Button(gotoButtonRect,
+                            new GUIContent(_resources.GotoButtonTexture, "Go to asset in project"),
+                            ButtonStyle))
+            {
+                GUI.enabled = true;
+                return;
+            }
+
+            Object obj = AssetDatabase.LoadAssetAtPath<Object>(assetPath.stringValue);
+
+            if (obj != null)
+            {
+                EditorGUIUtility.PingObject(obj);
+            }
+
+            GUI.enabled = true;
+        }
+
+
+        private void DisplayModeButton(int buttonIndex, SerializedProperty assetPath, ref Rect position)
+        {
+            Rect displayModeButtonRect = new(position.x + ButtonShift(buttonIndex),
+                                             position.y, BUTTON_WIDTH,
+                                             position.height);
+
+            if (!GUI.Button(displayModeButtonRect,
+                            new GUIContent(GetSymbolByDisplayMode(), "Change path display mode")))
             {
                 return;
             }
 
+            _currentDisplayMode = (PathDisplayMode)((int)(_currentDisplayMode + 1) %
+                                                    Enum.GetValues(typeof(PathDisplayMode)).Length);
+        }
+
+
+        private void SearchButtonObjectPicker(int buttonIndex, SerializedProperty assetPath,
+                                              ref Rect position, SerializedProperty original)
+        {
+            Rect searchButtonRect = new(position.x + ButtonShift(buttonIndex),
+                                        position.y, BUTTON_WIDTH,
+                                        position.height);
+
+
+            int pickerControlID = -1;
+
+            pickerControlID = GUIUtility.GetControlID(FocusType.Passive);
+            // On press action
+            if (GUI.Button(searchButtonRect,
+                           new GUIContent(_resources.SearchButtonTexture, "Open object picker"),
+                           ButtonStyle))
+            {
+                // Show window
+                EditorGUIUtility.ShowObjectPicker<Object>(null, false, "", pickerControlID);
+
+
+                Type objectSelectorType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.ObjectSelector");
+                if (objectSelectorType == null) return;
+
+                EditorWindow objectPicker = EditorWindow.GetWindow(objectSelectorType);
+
+                if (objectPicker == null)
+                {
+                    return;
+                }
+
+                // Window position
+                Vector2 mousePosition = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
+
+                objectPicker.position = new Rect(mousePosition.x,
+                                                 mousePosition.y - SELECTOR_WINDOW_Y_SHIFT,
+                                                 objectPicker.position.width,
+                                                 objectPicker.position.height);
+
+                // Window title
+                objectPicker.titleContent = new GUIContent($"Select: {original.displayName}");
+            }
+
+            if (Event.current.commandName != "ObjectSelectorUpdated" ||
+                EditorGUIUtility.GetObjectPickerControlID() != pickerControlID)
+            {
+                return;
+            }
 
             Object pickedObject = EditorGUIUtility.GetObjectPickerObject();
 
@@ -69,6 +261,51 @@ namespace InspectorPathField.Editor
             // Save path to asset
             string path = AssetDatabase.GetAssetPath(pickedObject);
             assetPath.stringValue = path;
+        }
+
+
+        private void SearchButtonUnitySearch(int buttonIndex, SerializedProperty assetPath,
+                                             ref Rect position, SerializedProperty original)
+        {
+            Rect searchButtonRect = new(position.x + ButtonShift(buttonIndex),
+                                        position.y, BUTTON_WIDTH,
+                                        position.height);
+
+            if (!GUI.Button(searchButtonRect, _resources.SearchButtonTexture, ButtonStyle))
+            {
+                return;
+            }
+
+            SearchContext context = SearchService.CreateContext("asset",
+                                                                _settings.SearchQuery);
+
+            SearchViewState state = SearchViewState.CreatePickerState($"Select: {original.displayName}",
+                                                                      context,
+                                                                      ProceedSelection,
+                                                                      flags: _settings.SearchViewFlags);
+
+            SearchService.ShowPicker(state);
+
+            return;
+
+            void ProceedSelection(SearchItem obj, bool i)
+            {
+                if (GlobalObjectId.TryParse(obj.value as string, out GlobalObjectId id))
+                {
+                    assetPath.stringValue = AssetDatabase.GUIDToAssetPath(id.assetGUID);
+                    assetPath.serializedObject.ApplyModifiedProperties();
+                }
+                else
+                {
+                    throw new Exception($"Object {obj} cannot be found or loaded");
+                }
+            }
+        }
+
+
+        private float ButtonShift(int buttonIndex)
+        {
+            return _textFieldWidth + (BUTTON_WIDTH * buttonIndex) + (BUTTON_SPACING * (buttonIndex + 1));
         }
     }
 }
