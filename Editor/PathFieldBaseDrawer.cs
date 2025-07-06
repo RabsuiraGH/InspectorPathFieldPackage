@@ -1,17 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using UnityEditor;
 using UnityEditor.Search;
 using UnityEngine;
-using UnityEngine.Search;
 using Object = UnityEngine.Object;
 
 namespace InspectorPathField.Editor
 {
-    [CustomPropertyDrawer(typeof(PathField))]
-    internal sealed class PathFieldDrawer : PropertyDrawer
+    internal class PathFieldBaseDrawer : PropertyDrawer
     {
         private static PathFieldResources _resources;
         private static PathFieldSettings _settings;
@@ -22,16 +19,12 @@ namespace InspectorPathField.Editor
         private const float BTN_SHIFT = (BUTTON_WIDTH * BUTTON_COUNT) + (BUTTON_SPACING * (BUTTON_COUNT - 1));
         private float _textFieldWidth;
 
-        private static readonly GUIStyle ButtonStyle = new(GUI.skin.button)
-        {
-            border = new RectOffset(1, 1, 1, 1),
-            padding = new RectOffset(1, 1, 1, 1)
-        };
+        private GUIStyle _buttonStyle;
 
         private PathDisplayMode _currentDisplayMode = PathDisplayMode.ShortPath;
 
 
-        public PathFieldDrawer()
+        public PathFieldBaseDrawer()
         {
             if (_resources == null)
             {
@@ -64,8 +57,12 @@ namespace InspectorPathField.Editor
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            // Get property
-            SerializedProperty assetPath = property.FindPropertyRelative("AssetPath");
+            _buttonStyle ??= new GUIStyle(GUI.skin.button)
+            {
+                border = new RectOffset(1, 1, 1, 1),
+                padding = new RectOffset(1, 1, 1, 1)
+            };
+
 
             // Calculate text field size depends on the button size
             _textFieldWidth = position.width - BTN_SHIFT;
@@ -79,32 +76,32 @@ namespace InspectorPathField.Editor
             // Display mode logic
             if (textFieldRect.Contains(Event.current.mousePosition)) // if mouse hover, show full path and let change
             {
-                displayText = assetPath.stringValue;
-                assetPath.stringValue = EditorGUI.TextField(textFieldRect, label, displayText);
+                displayText = property.stringValue;
+                property.stringValue = EditorGUI.TextField(textFieldRect, label, displayText);
             }
             else // if no, just show current display mode
             {
-                displayText = GetPathForCurrentMode(assetPath.stringValue);
+                displayText = GetPathForCurrentMode(property.stringValue);
                 EditorGUI.TextField(textFieldRect, label, displayText);
             }
 
             // Goto button
-            GotoButton(0, assetPath, ref position);
+            GotoButton(0, property, ref position);
 
             // Display mode
-            DisplayModeButton(1, assetPath, ref position);
+            DisplayModeButton(1, property, ref position);
 
             // Search button
             if (_settings.SearchType == SearchType.ObjectPicker)
             {
-                SearchButtonObjectPicker(2, assetPath, ref position, property);
+                SearchButtonObjectPicker(2, property, ref position, property);
             }
             else if (_settings.SearchType == SearchType.UnitySearch)
             {
-                SearchButtonUnitySearch(2, assetPath, ref position, property);
+                SearchButtonUnitySearch(2, property, ref position, property);
             }
 
-            assetPath.serializedObject.ApplyModifiedProperties();
+            property.serializedObject.ApplyModifiedProperties();
         }
 
 
@@ -169,7 +166,7 @@ namespace InspectorPathField.Editor
             // On press action
             if (!GUI.Button(gotoButtonRect,
                             new GUIContent(_resources.GotoButtonTexture, "Go to asset in project"),
-                            ButtonStyle))
+                            _buttonStyle))
             {
                 GUI.enabled = true;
                 return;
@@ -217,7 +214,7 @@ namespace InspectorPathField.Editor
             // On press action
             if (GUI.Button(searchButtonRect,
                            new GUIContent(_resources.SearchButtonTexture, "Open object picker"),
-                           ButtonStyle))
+                           _buttonStyle))
             {
                 // Show window
                 EditorGUIUtility.ShowObjectPicker<Object>(null, false, "", pickerControlID);
@@ -271,7 +268,7 @@ namespace InspectorPathField.Editor
                                         position.y, BUTTON_WIDTH,
                                         position.height);
 
-            if (!GUI.Button(searchButtonRect, _resources.SearchButtonTexture, ButtonStyle))
+            if (!GUI.Button(searchButtonRect, _resources.SearchButtonTexture, _buttonStyle))
             {
                 return;
             }
